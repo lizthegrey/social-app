@@ -1,4 +1,8 @@
 import {LINK_META_PROXY} from '#/lib/constants'
+import {
+  fetchLinkMetaViaAnubis,
+  isAnubisChallengeTitle,
+} from '#/lib/link-meta/anubis'
 import {getGiphyMetaUri} from '#/lib/strings/embed-player'
 import {parseStarterPackUri} from '#/lib/strings/starter-pack'
 import {type app} from '#/lexicons'
@@ -107,6 +111,10 @@ export async function getLinkMeta(
     if (shouldFollowRedirect) {
       meta.url = body.url
     }
+
+    if (isAnubisChallengeTitle(meta.title)) {
+      await replaceAnubisChallengeMeta(meta, timeout)
+    }
   } catch (e) {
     // failed
     console.error(e)
@@ -116,6 +124,32 @@ export async function getLinkMeta(
   }
 
   return meta
+}
+
+/**
+ * cardyb got an Anubis proof-of-work page instead of the real one. Retry from
+ * the user's device, solving the challenge as their browser would. If that
+ * isn't possible, drop the interstitial's metadata rather than post a card
+ * titled "Making sure you're not a bot!".
+ */
+async function replaceAnubisChallengeMeta(meta: LinkMeta, timeout: number) {
+  const controller = new AbortController()
+  const to = setTimeout(() => controller.abort(), timeout || 5e3)
+  let fetched
+  try {
+    fetched = await fetchLinkMetaViaAnubis(meta.url, controller.signal)
+  } catch (e) {
+    console.error(e)
+  } finally {
+    clearTimeout(to)
+  }
+
+  meta.title = fetched?.title
+  meta.description = fetched?.description
+  meta.image = fetched?.image
+  meta.author = undefined
+  meta.associatedRefs = undefined
+  meta.view = undefined
 }
 
 const IMAGE_PATH_REGEX =
