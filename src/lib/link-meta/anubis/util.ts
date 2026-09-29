@@ -1,5 +1,3 @@
-import {sha256} from 'js-sha256'
-
 /**
  * Titles of the Anubis (https://anubis.techaro.lol) interstitial page in
  * every locale it ships. If cardyb hands us one of these as a page title, it
@@ -50,116 +48,6 @@ export function isAnubisChallengeTitle(title: string | undefined): boolean {
   return ANUBIS_CHALLENGE_TITLES.has(normalizeTitle(title))
 }
 
-export type AnubisChallenge = {
-  /**
-   * Challenge ID, absent on Anubis versions older than 1.20.
-   */
-  id?: string
-  randomData: string
-  algorithm: string
-  difficulty: number
-}
-
-/**
- * Extracts the challenge from an Anubis interstitial page, or returns
- * undefined if the page isn't one.
- */
-export function parseAnubisChallenge(
-  html: string,
-): AnubisChallenge | undefined {
-  const match = html.match(
-    /<script[^>]*\bid=["']anubis_challenge["'][^>]*>([\s\S]*?)<\/script>/i,
-  )
-  if (!match) return
-  try {
-    const parsed = JSON.parse(match[1]) as {
-      rules?: {algorithm?: string; difficulty?: number}
-      challenge?:
-        string | {id?: string; randomData?: string; difficulty?: number}
-    }
-    const rules = parsed.rules ?? {}
-    const challenge = parsed.challenge
-    const randomData =
-      typeof challenge === 'string' ? challenge : challenge?.randomData
-    const difficulty =
-      rules.difficulty ??
-      (typeof challenge === 'object' ? challenge.difficulty : undefined)
-    if (!randomData || typeof difficulty !== 'number') return
-    return {
-      id: typeof challenge === 'object' ? challenge.id : undefined,
-      randomData,
-      algorithm: rules.algorithm ?? 'fast',
-      difficulty,
-    }
-  } catch {
-    return
-  }
-}
-
-/**
- * Difficulty is measured in leading hex zeroes, so expected work is 16^n
- * hashes. Past this we'd be burning the user's battery for seconds or minutes,
- * so we give up and fall back to whatever cardyb gave us.
- */
-export const MAX_POW_DIFFICULTY = 5
-
-/**
- * Hashes to try between yields to the event loop, so the UI stays responsive
- * while we grind.
- */
-const HASHES_PER_YIELD = 2000
-
-/**
- * Solves the Anubis proof-of-work: find the smallest nonce such that
- * sha256(randomData + nonce) has `difficulty` leading hex zeroes. This is the
- * same work the Anubis page would make the user's browser do.
- */
-export async function solveProofOfWork(
-  randomData: string,
-  difficulty: number,
-  signal?: AbortSignal,
-): Promise<{nonce: number; hash: string}> {
-  if (difficulty > MAX_POW_DIFFICULTY) {
-    throw new Error(`Anubis difficulty ${difficulty} too high`)
-  }
-  const prefix = '0'.repeat(difficulty)
-  for (let nonce = 0; ; nonce++) {
-    const hash = sha256(randomData + nonce)
-    if (hash.startsWith(prefix)) {
-      return {nonce, hash}
-    }
-    if (nonce % HASHES_PER_YIELD === HASHES_PER_YIELD - 1) {
-      await new Promise(resolve => setTimeout(resolve, 0))
-      if (signal?.aborted) {
-        throw new Error('Aborted solving Anubis challenge')
-      }
-    }
-  }
-}
-
-/**
- * Parses a `Refresh` header or `<meta http-equiv="refresh">` value like
- * `5; url=/foo`.
- */
-export function parseRefresh(
-  value: string | null | undefined,
-): {delaySeconds: number; url: string} | undefined {
-  if (!value) return
-  const match = decodeHtmlEntities(value).match(
-    /^\s*(\d+)\s*[;,]\s*url\s*=\s*['"]?([^'"]+)['"]?\s*$/i,
-  )
-  if (!match) return
-  return {delaySeconds: Number(match[1]), url: match[2]}
-}
-
-export function findMetaRefresh(html: string): string | undefined {
-  for (const attrs of iterateMetaTags(html)) {
-    if (attrs['http-equiv']?.toLowerCase() === 'refresh') {
-      return attrs.content
-    }
-  }
-}
-
 export type ParsedPageMeta = {
   title?: string
   description?: string
@@ -168,9 +56,13 @@ export type ParsedPageMeta = {
 
 /**
  * Pulls OpenGraph / Twitter card / plain HTML metadata out of a page, roughly
- * matching what cardyb extracts server-side.
+ * matching what cardyb extracts server-side. Returns undefined if the page has
+ * none, or is itself an Anubis interstitial.
  */
-export function parsePageMeta(html: string, pageUrl: string): ParsedPageMeta {
+export function parsePageMeta(
+  html: string,
+  pageUrl: string,
+): ParsedPageMeta | undefined {
   const headEnd = html.search(/<\/head>/i)
   const head = headEnd === -1 ? html : html.slice(0, headEnd)
 
@@ -186,27 +78,42 @@ export function parsePageMeta(html: string, pageUrl: string): ParsedPageMeta {
   const title =
     tags['og:title'] ||
     tags['twitter:title'] ||
-    (titleTag ? decodeHtmlEntities(titleTag).trim() : undefined)
+    (titleTag ? decodeHtmlEntities(titleTag).trim() : undefined) ||
+    undefined
   const description =
     tags['og:description'] ||
     tags['twitter:description'] ||
     tags.description ||
     undefined
-  const rawImage =
+  const image = toHttpUrl(
     tags['og:image:secure_url'] ||
-    tags['og:image:url'] ||
-    tags['og:image'] ||
-    tags['twitter:image'] ||
-    tags['twitter:image:src']
+      tags['og:image:url'] ||
+      tags['og:image'] ||
+      tags['twitter:image'] ||
+      tags['twitter:image:src'],
+    pageUrl,
+  )
 
-  let image: string | undefined
-  if (rawImage) {
-    try {
-      image = new URL(rawImage, pageUrl).toString()
-    } catch {}
+  if (isAnubisChallengeTitle(title)) return
+  if (!title && !description && !image) return
+  return {title, description, image}
+}
+
+/**
+ * The composer downloads the thumbnail on-device rather than via cardyb's
+ * image proxy, so only allow http(s) - never e.g. `file:` URLs from a hostile
+ * page.
+ */
+function toHttpUrl(url: string | undefined, base: string): string | undefined {
+  if (!url) return
+  try {
+    const u = new URL(url, base)
+    return u.protocol === 'https:' || u.protocol === 'http:'
+      ? u.toString()
+      : undefined
+  } catch {
+    return
   }
-
-  return {title: title || undefined, description, image}
 }
 
 function* iterateMetaTags(html: string): Generator<Record<string, string>> {

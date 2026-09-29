@@ -15,6 +15,7 @@ import {BackgroundNotificationPreferencesProvider} from '@bsky.app/expo-backgrou
 import {useLingui} from '@lingui/react/macro'
 
 import {Provider as HideBottomBarBorderProvider} from '#/lib/hooks/useHideBottomBarBorder'
+import {AnubisSolverHost} from '#/lib/link-meta/anubis'
 import {QueryProvider} from '#/lib/react-query'
 import {ThemeProvider} from '#/lib/ThemeContext'
 import {Provider as TranslateOnDeviceProvider} from '#/lib/translation'
@@ -180,6 +181,7 @@ function InnerApp() {
                                                                 <TestCtrls />
                                                                 <Shell />
                                                                 <ToastOutlet />
+                                                                <AnubisSolverHost />
                                                               </TranslateOnDeviceProvider>
                                                             </IntentDialogProvider>
                                                           </GlobalGestureEventsProvider>
