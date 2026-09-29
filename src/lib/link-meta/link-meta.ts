@@ -1,8 +1,9 @@
 import {LINK_META_PROXY} from '#/lib/constants'
 import {
-  fetchLinkMetaViaAnubis,
-  isAnubisChallengeTitle,
-} from '#/lib/link-meta/anubis'
+  fetchLinkMetaViaWebView,
+  isBehindBotChallenge,
+  isBotChallengeTitle,
+} from '#/lib/link-meta/botChallenge'
 import {getGiphyMetaUri} from '#/lib/strings/embed-player'
 import {parseStarterPackUri} from '#/lib/strings/starter-pack'
 import {type app} from '#/lexicons'
@@ -99,7 +100,16 @@ export async function getLinkMeta(
     const body = (await response.json()) as CardybLinkMetaResponse
 
     if (body.error !== '') {
-      throw new Error(body.error)
+      /*
+       * e.g. Cloudflare answers cardyb's challenge with a 403. If that's
+       * what's going on, try again from the user's device before giving up.
+       */
+      const fetched = await fetchViaWebView(url, timeout, {probeFirst: true})
+      if (!fetched) {
+        throw new Error(body.error)
+      }
+      Object.assign(meta, fetched)
+      return meta
     }
 
     meta.description = body.description
@@ -112,8 +122,20 @@ export async function getLinkMeta(
       meta.url = body.url
     }
 
-    if (isAnubisChallengeTitle(meta.title)) {
-      await replaceAnubisChallengeMeta(meta, timeout)
+    if (isBotChallengeTitle(meta.title)) {
+      /*
+       * cardyb scraped a bot-challenge interstitial. Use what the user's
+       * device gets instead, or failing that, drop the interstitial's
+       * metadata rather than post a card titled "Making sure you're not a
+       * bot!".
+       */
+      const fetched = await fetchViaWebView(meta.url, timeout)
+      meta.title = fetched?.title
+      meta.description = fetched?.description
+      meta.image = fetched?.image
+      meta.author = undefined
+      meta.associatedRefs = undefined
+      meta.view = undefined
     }
   } catch (e) {
     // failed
@@ -127,29 +149,27 @@ export async function getLinkMeta(
 }
 
 /**
- * cardyb got an Anubis proof-of-work page instead of the real one. Retry from
- * the user's device, solving the challenge as their browser would. If that
- * isn't possible, drop the interstitial's metadata rather than post a card
- * titled "Making sure you're not a bot!".
+ * Loads the page in a hidden WebView on the user's device, letting any bot
+ * challenge run as it would in their browser. Native only; resolves undefined
+ * on web.
  */
-async function replaceAnubisChallengeMeta(meta: LinkMeta, timeout: number) {
+async function fetchViaWebView(
+  url: string,
+  timeout: number,
+  {probeFirst = false}: {probeFirst?: boolean} = {},
+) {
   const controller = new AbortController()
   const to = setTimeout(() => controller.abort(), timeout || 5e3)
-  let fetched
   try {
-    fetched = await fetchLinkMetaViaAnubis(meta.url, controller.signal)
+    if (probeFirst && !(await isBehindBotChallenge(url, controller.signal))) {
+      return
+    }
+    return await fetchLinkMetaViaWebView(url, controller.signal)
   } catch (e) {
     console.error(e)
   } finally {
     clearTimeout(to)
   }
-
-  meta.title = fetched?.title
-  meta.description = fetched?.description
-  meta.image = fetched?.image
-  meta.author = undefined
-  meta.associatedRefs = undefined
-  meta.view = undefined
 }
 
 const IMAGE_PATH_REGEX =

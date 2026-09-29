@@ -1,10 +1,15 @@
 /**
- * Titles of the Anubis (https://anubis.techaro.lol) interstitial page in
- * every locale it ships. If cardyb hands us one of these as a page title, it
- * got the proof-of-work page instead of the real content.
+ * Page titles of bot-challenge interstitials that a real browser gets past
+ * without user interaction. If cardyb reports one of these as a page's title,
+ * it scraped the interstitial rather than the page, and the same title tells
+ * the WebView to keep waiting while the challenge runs.
  */
-const ANUBIS_CHALLENGE_TITLES = new Set(
+const BOT_CHALLENGE_TITLES = new Set(
   [
+    /*
+     * Anubis (https://anubis.techaro.lol), every locale it ships, from
+     * lib/localization/locales/*.json "making_sure_not_bot".
+     */
     'Bekrefter at du ikke er en bot!',
     'Bot olmadığınızdan emin oluyoruz!',
     'Certificando de que você não é um bot!',
@@ -33,19 +38,34 @@ const ANUBIS_CHALLENGE_TITLES = new Set(
     'あなたがボットでないことを確認しています！',
     '正在确认你是不是机器人！',
     '正在確認你是不是機器人！',
+    // Cloudflare managed challenge (served with `cf-mitigated: challenge`)
+    'Just a moment...',
   ].map(normalizeTitle),
 )
 
 function normalizeTitle(title: string): string {
-  return decodeHtmlEntities(title).replace(/[‘’]/g, "'").trim()
+  return decodeHtmlEntities(title)
+    .replace(/[‘’]/g, "'")
+    .replace(/…/g, '...')
+    .trim()
 }
 
 /**
- * Whether a title scraped by cardyb is actually the Anubis interstitial.
+ * Whether a page title is that of a known bot-challenge interstitial.
  */
-export function isAnubisChallengeTitle(title: string | undefined): boolean {
+export function isBotChallengeTitle(title: string | undefined): boolean {
   if (!title) return false
-  return ANUBIS_CHALLENGE_TITLES.has(normalizeTitle(title))
+  return BOT_CHALLENGE_TITLES.has(normalizeTitle(title))
+}
+
+/**
+ * The page's own `<title>`, ignoring OpenGraph. Anubis can pass the real
+ * page's OpenGraph tags through onto its interstitial, so this is what tells
+ * us whether we're still looking at the challenge.
+ */
+export function getPageTitle(html: string): string | undefined {
+  const title = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]
+  return title === undefined ? undefined : decodeHtmlEntities(title).trim()
 }
 
 export type ParsedPageMeta = {
@@ -57,7 +77,7 @@ export type ParsedPageMeta = {
 /**
  * Pulls OpenGraph / Twitter card / plain HTML metadata out of a page, roughly
  * matching what cardyb extracts server-side. Returns undefined if the page has
- * none, or is itself an Anubis interstitial.
+ * none, or is itself a bot-challenge interstitial.
  */
 export function parsePageMeta(
   html: string,
@@ -74,12 +94,8 @@ export function parsePageMeta(
     }
   }
 
-  const titleTag = head.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]
   const title =
-    tags['og:title'] ||
-    tags['twitter:title'] ||
-    (titleTag ? decodeHtmlEntities(titleTag).trim() : undefined) ||
-    undefined
+    tags['og:title'] || tags['twitter:title'] || getPageTitle(head) || undefined
   const description =
     tags['og:description'] ||
     tags['twitter:description'] ||
@@ -94,7 +110,7 @@ export function parsePageMeta(
     pageUrl,
   )
 
-  if (isAnubisChallengeTitle(title)) return
+  if (isBotChallengeTitle(title)) return
   if (!title && !description && !image) return
   return {title, description, image}
 }

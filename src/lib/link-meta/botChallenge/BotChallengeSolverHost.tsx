@@ -2,16 +2,21 @@ import {useEffect, useRef, useState} from 'react'
 import {View} from 'react-native'
 import {WebView, type WebViewMessageEvent} from 'react-native-webview'
 
-import {setSolverHost, type SolveRequest} from '#/lib/link-meta/anubis/solver'
-import {parsePageMeta} from '#/lib/link-meta/anubis/util'
+import {
+  setSolverHost,
+  type SolveRequest,
+} from '#/lib/link-meta/botChallenge/solver'
+import {
+  getPageTitle,
+  isBotChallengeTitle,
+  parsePageMeta,
+} from '#/lib/link-meta/botChallenge/util'
 
 /*
- * Runs after every page load in the hidden WebView. While Anubis's challenge
- * page is up we stay quiet and let its own script solve and redirect; once
- * we land on the real page we report its <head>.
+ * Runs after every page load in the hidden WebView and reports the page's
+ * <head>. The host decides whether it's still a challenge interstitial.
  */
 const REPORT_PAGE_JS = `(function () {
-  if (document.getElementById('anubis_challenge')) return;
   window.ReactNativeWebView.postMessage(JSON.stringify({
     url: location.href,
     head: document.head ? document.head.outerHTML : '',
@@ -21,10 +26,10 @@ true;`
 
 /**
  * Mount once near the app root. Renders nothing until `getLinkMeta` needs a
- * page loaded past an Anubis challenge, then renders an invisible WebView per
- * pending request.
+ * page loaded in a real browser engine - e.g. to get past a bot challenge
+ * that cardyb can't - then renders an invisible WebView per pending request.
  */
-export function AnubisSolverHost() {
+export function BotChallengeSolverHost() {
   const [requests, setRequests] = useState<SolveRequest[]>([])
 
   useEffect(() => {
@@ -46,7 +51,18 @@ function SolverWebView({request}: {request: SolveRequest}) {
         url?: unknown
         head?: unknown
       }
-      if (httpError.current || typeof head !== 'string') {
+      if (typeof head !== 'string') {
+        request.finish(undefined)
+        return
+      }
+      /*
+       * Still on the interstitial: let the challenge's own script run and
+       * navigate. Checked before the HTTP status because Cloudflare serves
+       * its challenge as a 403. If it never clears (e.g. it wants a click),
+       * the caller's timeout gives up.
+       */
+      if (isBotChallengeTitle(getPageTitle(head))) return
+      if (httpError.current) {
         request.finish(undefined)
         return
       }
@@ -80,7 +96,7 @@ function SolverWebView({request}: {request: SolveRequest}) {
         onLoadStart={() => {
           httpError.current = false
         }}
-        // don't make a card out of a 404 or an Anubis error page
+        // don't make a card out of a 404 or a challenge's block page
         onHttpError={() => {
           httpError.current = true
         }}

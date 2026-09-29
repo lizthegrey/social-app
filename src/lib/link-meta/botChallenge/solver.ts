@@ -1,4 +1,4 @@
-import {type ParsedPageMeta} from '#/lib/link-meta/anubis/util'
+import {type ParsedPageMeta} from '#/lib/link-meta/botChallenge/util'
 
 export type SolveRequest = {
   id: number
@@ -17,7 +17,7 @@ let pending: SolveRequest[] = []
 let nextId = 0
 
 /**
- * Called by `AnubisSolverHost` on mount (and with undefined on unmount) to
+ * Called by `BotChallengeSolverHost` on mount (and with undefined on unmount) to
  * receive the current set of pages to load.
  */
 export function setSolverHost(h: Host | undefined) {
@@ -26,10 +26,10 @@ export function setSolverHost(h: Host | undefined) {
 }
 
 /**
- * Loads `url` in a hidden WebView so that Anubis's own challenge code runs in
- * a real browser engine on the user's device - exactly as if they'd opened
- * the link themselves - then extracts link card metadata from the page it
- * lets through. Resolves undefined if no host is mounted, the page has no
+ * Loads `url` in a hidden WebView so that any bot challenge (Anubis,
+ * Cloudflare, ...) runs its own code in a real browser engine on the user's
+ * device - exactly as if they'd opened the link themselves - then extracts
+ * link card metadata from the page it lets through. Resolves undefined if no host is mounted, the page has no
  * usable metadata, or `signal` aborts first.
  */
 export function solveInWebView(
